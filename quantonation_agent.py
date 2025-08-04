@@ -11,15 +11,16 @@ import numpy as np
 import faiss
 import streamlit as st
 import openai
+import os
 
 # --- Setup ---
 script_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(script_dir)
 print("\U0001F4C2 Working directory set to:", os.getcwd())
 
-NOTION_TOKEN = st.secrets["NOTION_TOKEN"]
-NOTION_DATABASE_ID = st.secrets["NOTION_DATABASE_ID"]
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
 openai.api_key = OPENAI_API_KEY
 
 if not OPENAI_API_KEY or not NOTION_TOKEN or not NOTION_DATABASE_ID:
