@@ -1,0 +1,8 @@
+streamlit
+openai
+requests
+python-dotenv
+faiss-cpu
+tqdm
+numpy
+pillow
