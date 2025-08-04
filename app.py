@@ -1,4 +1,10 @@
 import streamlit as st
+from PIL import Image
+import datetime
+import requests
+import os
+import json
+
 from quantonation_agent import (
     generate_problem_statement,
     generate_gpt_output,
@@ -9,26 +15,22 @@ from quantonation_agent import (
     search_corpus,
     build_faiss_index,
     load_faiss_index,
-    truncate_words,
     parse_gpt_response,
     notion_headers,
-    NOTION_DATABASE_ID,
-    requests,
-    os,
-    json
+    NOTION_DATABASE_ID
 )
-import datetime
 
+# ----- Page Config -----
 st.set_page_config(page_title="Quantonation Virtual Studio", layout="wide")
-from PIL import Image
 
+# ----- Logo -----
 logo = Image.open("dyybccql1d15pxbo0ecu-3.png")
 st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
 st.image(logo, width=250)
 st.markdown("</div>", unsafe_allow_html=True)
 st.markdown("## 🧠 Quantonation Virtual Studio")
 
-# Load or build FAISS index
+# ----- Load FAISS Index -----
 if os.path.exists("faiss.index") and os.path.exists("corpus_texts.json"):
     index, corpus_texts = load_faiss_index()
     st.success("FAISS index loaded.")
@@ -36,10 +38,14 @@ else:
     index, corpus_texts = build_faiss_index()
     st.success("FAISS index built.")
 
-# Fetch list of existing pages
+# ----- Fetch Existing Notion Pages -----
 existing_pages = []
 query_payload = {"page_size": 100}
-response = requests.post(f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query", headers=notion_headers, json=query_payload)
+response = requests.post(
+    f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query",
+    headers=notion_headers,
+    json=query_payload
+)
 if response.status_code == 200:
     for page in response.json().get("results", []):
         title_prop = page["properties"].get("Company Idea", {}).get("title", [])
@@ -49,7 +55,7 @@ if response.status_code == 200:
 else:
     st.error("Failed to fetch existing Notion pages")
 
-# Input form
+# ----- Update Existing Page -----
 st.subheader("🔁 Update Existing Page")
 selected_title = st.selectbox("Choose an existing idea to update", [title for title, _ in existing_pages])
 existing_id = next((pid for title, pid in existing_pages if title == selected_title), None)
@@ -73,15 +79,18 @@ if update_now and existing_id.strip():
                 memo = generate_deeptech_brief(idea, problem, context_snippets)
                 title = f"{datetime.datetime.now().strftime('%Y-%m-%d')} – Memo: {idea[:60]}"
                 create_notion_subpage(existing_id, title, memo)
-                st.success("Existing Notion page updated.")
+                st.success("✅ Existing Notion page updated.")
         else:
             st.error(f"Failed to fetch page: {page_data.text}")
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"❌ Error: {e}")
+
+# ----- Add New Idea -----
+st.subheader("➕ Add New Startup Idea")
 with st.form("new_theme_form"):
     new_idea = st.text_input("Enter new startup idea (Company Idea title)")
     enrich_now = st.checkbox("Immediately enrich this idea after adding", value=True)
-    submitted = st.form_submit_button("➕ Add Theme to Notion")
+    submitted = st.form_submit_button("Add Idea")
 
 if submitted:
     if new_idea.strip():
@@ -95,7 +104,7 @@ if submitted:
         if response.status_code == 200:
             new_page = response.json()
             new_id = new_page["id"]
-            st.success(f"Created new page for: {new_idea}")
+            st.success(f"✅ Created new page for: {new_idea}")
 
             if enrich_now:
                 with st.spinner("Enriching via GPT..."):
@@ -111,8 +120,8 @@ if submitted:
                     title = f"{datetime.datetime.now().strftime('%Y-%m-%d')} – Memo: {new_idea[:60]}"
                     create_notion_subpage(new_id, title, memo)
 
-                    st.success("Notion page enriched successfully.")
+                    st.success("✅ Notion page enriched successfully.")
         else:
-            st.error(f"Failed to create new theme: {response.text}")
+            st.error(f"❌ Failed to create new theme: {response.text}")
     else:
-        st.warning("Please enter a valid idea title.")
+        st.warning("⚠️ Please enter a valid idea title.")
