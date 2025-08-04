@@ -15,10 +15,15 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(script_dir)
 print("\U0001F4C2 Working directory set to:", os.getcwd())
 
-load_dotenv("Keys.env")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-NOTION_TOKEN = os.getenv("NOTION_TOKEN")
-NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
+if os.path.exists("Keys.env"):
+    load_dotenv("Keys.env")
+    NOTION_TOKEN = os.getenv("NOTION_TOKEN")
+    NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+else:
+    NOTION_TOKEN = st.secrets["NOTION_TOKEN"]
+    NOTION_DATABASE_ID = st.secrets["NOTION_DATABASE_ID"]
+    OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 
 if not OPENAI_API_KEY or not NOTION_TOKEN or not NOTION_DATABASE_ID:
     raise EnvironmentError("❌ Missing env variables")
