@@ -6,3 +6,6 @@ faiss-cpu
 tqdm
 numpy
 pillow
+fastapi
+uvicorn
+pydantic
