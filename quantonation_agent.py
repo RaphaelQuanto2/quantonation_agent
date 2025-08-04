@@ -20,7 +20,7 @@ print("\U0001F4C2 Working directory set to:", os.getcwd())
 
 NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
+NOTION_TOKEN = os.environ["NOTION_TOKEN"]
 openai.api_key = OPENAI_API_KEY
 
 if not OPENAI_API_KEY or not NOTION_TOKEN or not NOTION_DATABASE_ID:
