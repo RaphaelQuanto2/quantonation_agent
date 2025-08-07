@@ -34,6 +34,43 @@ notion_headers = {
     "Content-Type": "application/json",
 }
 
+import fitz  # PyMuPDF
+from sentence_transformers import SentenceTransformer
+
+model = SentenceTransformer("all-MiniLM-L6-v2")  # Consistent with FAISS setup
+
+def extract_text_from_pdf(uploaded_file):
+    doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+    text = ""
+    for page in doc:
+        text += page.get_text()
+    return text.strip()
+
+def inject_pdf_into_faiss(uploaded_files, index, corpus_texts):
+    new_chunks = []
+    for uploaded_file in uploaded_files:
+        pdf_text = extract_text_from_pdf(uploaded_file)
+        for chunk in pdf_text.split("\n\n"):
+            cleaned = chunk.strip()
+            if len(cleaned) > 50:
+                corpus_texts.append(cleaned)
+                new_chunks.append(cleaned)
+
+    if not new_chunks:
+        return index, corpus_texts
+
+    # Embed and add to FAISS
+    new_embeddings = model.encode(new_chunks)
+    index.add(np.array(new_embeddings).astype("float32"))
+
+    # Save new state
+    faiss.write_index(index, INDEX_FILE)
+    with open(TEXTS_FILE, "w") as f:
+        json.dump(corpus_texts, f)
+
+    return index, corpus_texts
+
+
 # --- Constants ---
 CORPUS_PATH = "processed_chunks.jsonl"
 INDEX_FILE = "faiss.index"
