@@ -1,4 +1,5 @@
 streamlit
+pymupdf>=1.23.7
 openai
 requests
 python-dotenv
