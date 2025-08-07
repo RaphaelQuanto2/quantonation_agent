@@ -125,3 +125,19 @@ if submitted:
             st.error(f"❌ Failed to create new theme: {response.text}")
     else:
         st.warning("⚠️ Please enter a valid idea title.")
+
+# ----- Upload PDF Papers -----
+st.markdown("### 📄 Upload Academic Papers (PDF)")
+
+uploaded_files = st.file_uploader(
+    "Upload PDF papers to add to GPT context",
+    type=["pdf"],
+    accept_multiple_files=True
+)
+
+if uploaded_files:
+    with st.spinner("Parsing and indexing uploaded papers..."):
+        from quantonation_agent import inject_pdf_into_faiss
+        index, corpus_texts = inject_pdf_into_faiss(uploaded_files, index, corpus_texts)
+    st.success("✅ PDFs parsed and added to context.")
+
