@@ -38,10 +38,23 @@ else:
     index, corpus_texts = build_faiss_index()
     st.success("FAISS index built.")
 
-with st.sidebar:
-    st.markdown("## 📊 FAISS Monitor")
-    st.metric(label="Vectors Indexed", value=index.ntotal)
-    st.caption("Number of vector entries currently stored in the FAISS index.")
+def show_faiss_sidebar(index, avg_chunks_per_paper=20):
+    """
+    Display FAISS index size and estimated paper count in Streamlit sidebar.
+
+    Parameters:
+    - index: a loaded FAISS index object
+    - avg_chunks_per_paper: estimated average number of chunks per paper
+    """
+    vector_count = index.ntotal
+    estimated_papers = vector_count // avg_chunks_per_paper
+
+    with st.sidebar:
+        st.markdown("## 📊 FAISS Monitor")
+        st.metric(label="Vectors Indexed", value=vector_count)
+        st.metric(label="Estimated Papers", value=estimated_papers)
+        st.caption(f"📝 Estimation based on ~{avg_chunks_per_paper} chunks per paper.")
+
 
 # ----- Fetch Existing Notion Pages -----
 existing_pages = []
