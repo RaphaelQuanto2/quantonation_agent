@@ -59,11 +59,13 @@ def inject_pdf_into_faiss(uploaded_files, index, corpus_texts):
     if not new_chunks:
         return index, corpus_texts
 
-    # Embed and add to FAISS
-    new_embeddings = model.encode(new_chunks)
+    # Use OpenAI to embed (not sentence-transformers)
+    resp = client.embeddings.create(model="text-embedding-3-small", input=new_chunks)
+    new_embeddings = [e.embedding for e in resp.data]
+
     index.add(np.array(new_embeddings).astype("float32"))
 
-    # Save new state
+    # Save index and texts
     faiss.write_index(index, INDEX_FILE)
     with open(TEXTS_FILE, "w") as f:
         json.dump(corpus_texts, f)
