@@ -56,14 +56,6 @@ def show_faiss_sidebar(index, avg_chunks_per_paper=20):
         st.metric(label="Estimated Papers", value=estimated_papers)
         st.caption(f"📝 Estimation based on ~{avg_chunks_per_paper} chunks per paper.")
 
-# ----- Load FAISS Index -----
-if os.path.exists("faiss.index") and os.path.exists("corpus_texts.json"):
-    index, corpus_texts = load_faiss_index()
-    st.success("FAISS index loaded.")
-else:
-    index, corpus_texts = build_faiss_index()
-    st.success("FAISS index built.")
-
 # ✅ Call the sidebar function
 show_faiss_sidebar(index)
 
