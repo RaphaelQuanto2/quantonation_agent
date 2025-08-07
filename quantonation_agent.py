@@ -46,6 +46,21 @@ def extract_text_from_pdf(uploaded_file):
         text += page.get_text()
     return text.strip()
 
+def embed_chunks_with_openai(chunks, model="text-embedding-3-small", batch_size=80):
+    """Safely embeds text chunks using OpenAI API, in batches."""
+    embeddings = []
+    for i in range(0, len(chunks), batch_size):
+        batch = [c.strip()[:5000] for c in chunks[i:i + batch_size] if isinstance(c, str) and c.strip()]
+        if not batch:
+            continue
+        try:
+            resp = client.embeddings.create(model=model, input=batch)
+            embeddings.extend([e.embedding for e in resp.data])
+        except Exception as e:
+            print("❌ Embedding API error:", e)
+            raise e
+    return embeddings
+
 def inject_pdf_into_faiss(uploaded_files, index, corpus_texts):
     new_chunks = []
     for uploaded_file in uploaded_files:
@@ -58,6 +73,20 @@ def inject_pdf_into_faiss(uploaded_files, index, corpus_texts):
 
     if not new_chunks:
         return index, corpus_texts
+
+    # ✅ Safely batch and embed
+    new_embeddings = embed_chunks_with_openai(new_chunks)
+
+    # ✅ Add to FAISS
+    index.add(np.array(new_embeddings).astype("float32"))
+
+    # ✅ Save to disk
+    faiss.write_index(index, INDEX_FILE)
+    with open(TEXTS_FILE, "w") as f:
+        json.dump(corpus_texts, f)
+
+    return index, corpus_texts
+
 
     # Use OpenAI to embed (not sentence-transformers)
     resp = client.embeddings.create(model="text-embedding-3-small", input=new_chunks)
