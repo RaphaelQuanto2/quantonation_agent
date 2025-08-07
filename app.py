@@ -38,6 +38,11 @@ else:
     index, corpus_texts = build_faiss_index()
     st.success("FAISS index built.")
 
+with st.sidebar:
+    st.markdown("## 📊 FAISS Monitor")
+    st.metric(label="Vectors Indexed", value=index.ntotal)
+    st.caption("Number of vector entries currently stored in the FAISS index.")
+
 # ----- Fetch Existing Notion Pages -----
 existing_pages = []
 query_payload = {"page_size": 100}
