@@ -299,6 +299,7 @@ def update_notion_properties(page_id, updates_dict, props=None):
     else:
         print("⚠️ No properties to update for this page.")
 
+
 def create_notion_subpage(parent_id, title, markdown_text):
     chunks = split_text_to_blocks(markdown_text)
     children = [
@@ -337,25 +338,39 @@ def create_notion_subpage(parent_id, title, markdown_text):
 
 def generate_problem_statement(idea: str) -> str:
     """
-    New: company-level, pitch-slide style problem statement.
+    Company-level, pitch-slide style problem statement,
+    explicitly anchored on the startup idea title.
     """
     prompt = f"""
 You are a deeptech VC partner and former operator.
 
-Write a **company-level problem statement** for the following startup idea, as it would appear on the *Problem* slide of a seed-stage pitch deck.
+Write a **company-level problem statement** for the following startup idea,
+as it would appear on the *Problem* slide of a seed-stage pitch deck.
 
-Startup idea: "{idea}"
+Startup idea (title): "{idea}"
 
-Requirements:
-- 2–4 sentences, no bullets, no headings.
+STRICT FORMATTING & STYLE:
+- Write in English.
+- Begin the paragraph EXACTLY with:
+  "A startup developing \\"{idea}\\" addresses the following problem: "
+- After that colon, continue the paragraph in the same sentence.
+- Total length: 2–4 sentences, one single paragraph (no line breaks).
 - Explicitly state **who** has the problem (customer segment, typical role, industry).
 - Describe the current workflow / status quo and why it is inadequate.
-- Quantify the pain with order-of-magnitude metrics (time, cost, yield loss, error rates, risk, etc.).
-- Anchor it in real-world constraints (scientific, engineering, regulatory, or infrastructure limitations).
+- Quantify the pain with order-of-magnitude metrics (time, cost, yield loss,
+  error rates, risk, etc.) when possible.
+- Anchor it in real-world constraints (scientific, engineering, regulatory,
+  or infrastructure limitations).
 - Make the problem urgent and recurring, not a nice-to-have.
 - Tone: clear, analytical, investor-grade. No marketing fluff.
 
-Output only the final paragraph. No introductions, no labels, no closing.
+Do NOT:
+- Invent a company or product name.
+- Talk generically about the field; always tie the description to
+  a startup developing "{idea}".
+- Add headings, bullet points, or any extra commentary.
+
+Output only the final paragraph, as plain text.
 """
     resp = client.chat.completions.create(
         model="gpt-4o",  # or "gpt-4"
@@ -367,29 +382,37 @@ Output only the final paragraph. No introductions, no labels, no closing.
 
 def generate_gpt_output(idea: str, problem: str, snippets: List[str]) -> str:
     """
-    New: stronger VC-style instructions, but **same output format**:
-    exactly 12 lines, each `Field: Value` so parse_gpt_response + update_notion_properties still work.
+    Strong VC-style instructions, but SAME output format:
+    12 lines "Field: Value" so parse_gpt_response + update_notion_properties still work.
+    Every field must explicitly refer back to a startup developing {idea}.
     """
     context = "\n\n".join(f"- {s}" for s in snippets)
 
     system_msg = """
-You are a senior deeptech VC partner at Quantonation filling an internal one-page startup sheet.
+You are a senior deeptech VC partner at Quantonation filling an internal one-page
+startup sheet for a single, very specific idea.
 
 Goal:
-Produce **concise, pitch-quality answers** for each field. 
-Each field should be concrete, specific to THIS idea, and non-generic.
+Produce concise, pitch-quality answers for each field.
+Each field must be concrete, specific to THIS idea, and non-generic.
 
-Style rules:
-- Each field value is a **single line** (no line breaks).
-- 1–3 short sentences per field.
-- Prefer numbers, examples, customer types and use-cases over buzzwords.
-- If you must estimate, use realistic order-of-magnitude ranges and clearly mark them as approximate.
-- NEVER answer with "not specified", "TBD", "unknown" or similar. If data is missing, infer a plausible range and say it is approximate.
-- Do not greet, do not sign, do not add headings or commentary.
+Language & style:
+- Write in English.
+- Always reason about **one startup**, not a broad field.
+- Never invent a company or product name.
+- Refer to it as "the startup", "this startup", or
+  "a startup developing \"<idea>\"" (as given in the user message).
+- Prefer numbers, concrete examples, customer types, and use-cases over buzzwords.
+- If you must estimate, use realistic order-of-magnitude ranges and label them as approximate.
+- NEVER answer with "not specified", "TBD", "unknown" or similar.
+- No greetings, no signatures, no headings, no commentary.
 
-You must respond **only** in this exact format, one field per line:
-
-Field: Value
+Output format (VERY IMPORTANT):
+- You must respond **only** in this exact format, one field per line:
+  Field: Value
+- The field name must match exactly one of the required names.
+- The value must be a single line of text (no line breaks).
+- 1–3 short sentences per value are allowed, but must stay on the same line.
 """
 
     user_msg = f"""
@@ -397,11 +420,12 @@ Scientific context (snippets, may contain multiple papers or projects):
 
 {context}
 
-Startup idea: "{idea}"
+Startup idea (title): "{idea}"
 Company-level problem statement: "{problem}"
 
 Using the context above and your own knowledge, fill in ALL of the following fields.
-Use **exactly** these field names, with exactly this spelling and punctuation, and in exactly this order:
+Use **exactly** these field names, with exactly this spelling and punctuation,
+and in exactly this order:
 
 Technology Leveraged
 Market Size
@@ -416,19 +440,57 @@ Funding Needs
 Potential Founders / Talent
 Sector/Vertical
 
-Content expectations for each field:
-- Technology Leveraged → Concrete description of the core scientific/engineering approach and why it is suited to the problem.
-- Market Size → Approximate TAM and initial SAM (with currency and geographies) plus 1 sentence on the adoption driver.
-- Competitive Advantage → 2–3 short differentiators separated by semicolons, focused on what is hard to copy.
-- Feasibility Score (1–10) → "X/10 –" followed by a brief justification referencing technical and execution risk.
-- Investment Thesis Fit → 1–2 sentences on why this fits a deeptech / Quantonation-type thesis.
-- Next Steps → 2–4 concrete milestones separated by semicolons.
-- Problem Severity (1–10) → "X/10 –" with a brief justification referencing economic or strategic pain.
-- Tech Readiness Level (TRL 1–9) → "X/9 –" with a short justification referencing prototype/lab/pilot status.
-- Strategic Partner Ideas → Names or types of specific potential partners and what they would bring.
-- Funding Needs → Order-of-magnitude capital and main use of funds over the next 24–36 months.
-- Potential Founders / Talent → Profiles of ideal founders / early hires and any notable labs/teams that could spin this out.
-- Sector/Vertical → 1–2 labeled sectors/subsectors (e.g. "Quantum sensing for inertial navigation", "Aerospace & defense").
+Content expectations (anchor everything to the idea title):
+
+- Technology Leveraged:
+  Describe the core scientific/engineering approach used by a startup developing "{idea}"
+  and why it is suited to the problem. Mention what is technically hard or differentiated.
+
+- Market Size:
+  Start the value with:
+  "For a startup developing \"{idea}\", the primary addressable market is ..."
+  Give approximate TAM and initial SAM (with currency and geographies), plus
+  1 sentence on the main adoption driver.
+
+- Competitive Advantage:
+  Describe 2–3 differentiators for a startup developing "{idea}" separated by semicolons,
+  focused on what is hard to copy (IP, performance, integration, data, ecosystem, regulatory angle).
+
+- Feasibility Score (1–10):
+  Use the format "X/10 – short justification", explicitly discussing technical and execution feasibility
+  for building a startup around "{idea}".
+
+- Investment Thesis Fit:
+  In 1–2 sentences, explain why **this startup** fits a deeptech / Quantonation-type thesis
+  (depth of tech, defensibility, upside, timing, strategic relevance).
+
+- Next Steps:
+  2–4 concrete next steps for a startup developing "{idea}" separated by semicolons
+  (e.g. prototype milestones, pilots, IP, key hires).
+
+- Problem Severity (1–10):
+  Use the format "X/10 – short justification" referring to pain level for the target customers,
+  explicitly tied to the problem described for "{idea}".
+
+- Tech Readiness Level (TRL 1–9):
+  Use the format "X/9 – short justification", indicating whether a startup developing "{idea}"
+  is likely at concept, lab demo, prototype, or pilot stage.
+
+- Strategic Partner Ideas:
+  Name specific types of partners (or concrete examples) that would help a startup developing "{idea}",
+  and why (e.g. satellite primes, OEMs, key labs).
+
+- Funding Needs:
+  Give an order-of-magnitude view of funding needs for a startup developing "{idea}"
+  over the next 24–36 months and main uses of funds.
+
+- Potential Founders / Talent:
+  Describe ideal founder and early-hire profiles for a startup developing "{idea}"
+  and any notable labs/teams that could realistically spin this out.
+
+- Sector/Vertical:
+  1–2 clear sector labels, explicitly tied to the idea, e.g.
+  "Quantum sensing for inertial navigation; Aerospace & defense".
 
 Return:
 - Exactly 12 lines, one per field, in the same order as above.
@@ -451,54 +513,75 @@ Return:
 
 def generate_deeptech_brief(idea: str, problem: str, snippets: List[str]) -> str:
     """
-    New: proper Quantonation-style memo, 4 sections, no email framing.
+    Quantonation-style memo, 4 sections, always anchored on
+    "a startup developing {idea}".
     """
     context = "\n\n".join(f"- {s}" for s in snippets)
     prompt = f"""
-You are drafting a concise **deeptech investment memo** for Quantonation about a potential startup.
+You are drafting a concise **deeptech investment memo** for Quantonation
+about a potential startup.
 
-This will be saved as a Notion subpage and should read like a **standalone one-pager memo**, not like an email.
-Therefore:
-- Do NOT greet anyone (no "Hi", no "Dear").
-- Do NOT address a specific recipient.
-- Do NOT sign off (no "Best regards", no name at the end).
-- Just write the memo itself: headings + paragraphs.
+This will be saved as a Notion subpage and should read like
+a **standalone one-pager memo**, not like an email.
+
+Language & naming:
+- Write in English.
+- Do NOT invent a company or product name.
+- Refer to the opportunity as "the startup" or
+  "a startup developing \\"{idea}\\"" throughout the memo.
+- Do not greet anyone (no "Hi"), do not sign, no recipient.
 
 Scientific context (snippets, may contain multiple papers or projects):
 {context}
 
-Startup idea: "{idea}"
+Startup idea (title): "{idea}"
 Company-level problem statement: "{problem}"
 
 Write the memo with **4 sections**, using Markdown level-2 headings (##):
 
 ## Scientific Context & Problem
-Explain the relevant scientific and technical background in clear language. 
-Connect the background explicitly to the company-level problem: who is affected, how current solutions fail, and why the problem is structurally hard (physics, engineering, regulation, infrastructure, etc.).
-When referencing items from the scientific context, cite them concisely like [Smith et al., 2022 – MIT] and mention the team or lab.
+Start the first paragraph with:
+"A startup developing \\"{idea}\\" addresses the following problem..."
+Then explain the relevant scientific and technical background in clear language.
+Connect the background explicitly to the company-level problem: who is affected,
+how current solutions fail, and why the problem is structurally hard
+(physics, engineering, regulation, infrastructure, etc.).
+When referencing items from the scientific context, cite them concisely like
+[Smith et al., 2022 – MIT] and mention the team or lab.
 Avoid over-focusing on a single paper when others are relevant.
 
 ## Market Analysis
-Describe the target customers and buying centers, the initial wedge use case, and the broader expansion path.
-Quantify the opportunity (TAM / SAM and logical order-of-magnitude figures) with at least one geography.
-Explain **why now** (technological maturity, regulation, cost curves, supply-chain or geopolitical drivers, etc.).
-This section should read like the “Market” and “Why now” slides of a pitch deck, not generic industry commentary.
+Describe the target customers and buying centers for a startup developing "{idea}",
+the initial wedge use case, and the broader expansion path.
+Quantify the opportunity (TAM / SAM and logical order-of-magnitude figures)
+with at least one geography.
+Explain **why now** (technological maturity, regulation, cost curves,
+supply-chain or geopolitical drivers, etc.).
+This section should read like the “Market” and “Why now” slides of a pitch deck.
 
 ## Competitive Landscape & Positioning
-List the key existing companies, consortia, and open-source projects in this space, each with one short description line.
-Explain how this potential startup would position itself relative to them (complementary, orthogonal, or head-on competition).
-Highlight 2–3 durable moats (IP, data, infrastructure, regulatory position, ecosystem) and how they could realistically be built.
+List the key existing companies, consortia, and open-source projects in this space,
+each with one short description line.
+Explain how a startup developing "{idea}" would position itself relative to them
+(complementary, orthogonal, or head-on competition).
+Highlight 2–3 durable moats (IP, data, infrastructure, regulatory position, ecosystem)
+and how they could realistically be built.
 
 ## Key People & Ecosystem
-Suggest relevant research groups, labs, and corporates to engage with (including those implied by the scientific context).
-Describe the ideal founder and early-team profiles (e.g. "postdoc from X lab + ex-Y industry operator").
-Mention key ecosystem nodes (accelerators, standardization bodies, early adopter corporates) that would materially de-risk the opportunity.
+Suggest relevant research groups, labs, and corporates to engage with,
+including those implied by the scientific context.
+Describe the ideal founder and early-team profiles for a startup developing "{idea}"
+(e.g. "postdoc from X lab + ex-Y industry operator").
+Mention key ecosystem nodes (accelerators, standardization bodies,
+early adopter corporates) that would materially de-risk the opportunity.
 
 Global constraints:
 - Total length ~700–1,000 words.
 - Use short paragraphs; no bullet lists.
-- Tone: analytical, neutral, and precise – this is an internal investment memo, not marketing copy.
-- Refer to the potential startup as “the company” or “this startup”; do not invent a brand name.
+- Tone: analytical, neutral, and precise – this is an internal investment memo,
+  not marketing copy.
+- Never invent a brand name; always talk about "the startup" or
+  "a startup developing \\"{idea}\\"".
 
 Output only the memo, starting with "## Scientific Context & Problem".
 No preamble, no meta-comments, no closing signature.
