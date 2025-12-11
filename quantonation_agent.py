@@ -101,7 +101,9 @@ def truncate_words(text, limit=1999):
 
 
 def extract_score(value_str):
-    match = re.search(r"(\d+(\.\d+)?)", value_str)
+    if value_str is None:
+        return None
+    match = re.search(r"(\d+(\.\d+)?)", str(value_str))
     return float(match.group(1)) if match else None
 
 
@@ -109,17 +111,44 @@ def normalize_key(k):
     return re.sub(r"[^a-z0-9]", "", k.lower())
 
 
-def parse_gpt_response(gpt_output):
+def parse_gpt_response(gpt_output: str):
+    """
+    Parse GPT output into a dict of {field_name: value}.
+
+    Priority:
+    1) Try to parse as JSON object: {"Field": "Value", ...}
+    2) Fallback to legacy "Field: Value" line-based parsing.
+    """
+    gpt_output = gpt_output.strip()
     updates = {}
-    lines = gpt_output.strip().split("\n")
+
+    # --- 1) Try JSON ---
+    if gpt_output.startswith("{"):
+        try:
+            data = json.loads(gpt_output)
+            # Normalize: keep only str or numeric values
+            for k, v in data.items():
+                if isinstance(v, (str, int, float)):
+                    updates[k.strip()] = str(v).strip()
+            print("\n✅ Parsed JSON fields:", updates)
+            if updates:
+                return updates
+        except Exception as e:
+            print("⚠️ JSON parse failed, falling back to line parser:", e)
+
+    # --- 2) Fallback: "Field: Value" lines ---
+    lines = gpt_output.split("\n")
     for line in lines:
         line = line.strip().lstrip("-•1234567890. ").strip()
+        if not line:
+            continue
         match = re.match(r"(.+?)\s*:\s*(.+)", line)
         if match:
             key = match.group(1).strip()
             value = match.group(2).strip()
             updates[key] = value
-    print("\n✅ Parsed fields:", updates)
+
+    print("\n✅ Parsed fields (fallback):", updates)
     return updates
 
 
@@ -211,29 +240,31 @@ def update_notion_properties(page_id, updates_dict):
         normalize_key("Sector/Vertical"): "Sector/Vertical",
     }
     props = {}
+
+    print("🔎 Raw GPT updates dict:", updates_dict)
+
     for k, value in updates_dict.items():
         field_key = normalize_key(k)
         field = known_fields.get(field_key)
         if not field:
-            print(f"⚠️ Unknown or unmatched field: {k}")
+            print(f"⚠️ Unknown or unmatched field from GPT: '{k}'")
             continue
 
         if any(x in field for x in ["Score", "Severity", "Level"]):
             num = extract_score(value)
             if num is not None:
                 props[field] = {"number": num}
-            elif value.lower() == "not specified":
-                props[field] = {"number": None}
-                print(f"ℹ️ Field '{field}' explicitly marked as not specified.")
             else:
-                print(f"⚠️ Couldn't parse score for {field}: '{value}'")
+                print(f"⚠️ Couldn't parse numeric score for {field}: '{value}'")
         else:
-            if value.lower() != "not specified":
-                props[field] = {
-                    "rich_text": [
-                        {"text": {"content": truncate_words(value, 1999)}}
-                    ]
-                }
+            if isinstance(value, str) and value.lower().strip() == "not specified":
+                # Skip null markers
+                continue
+            props[field] = {
+                "rich_text": [
+                    {"text": {"content": truncate_words(str(value), 1999)}}
+                ]
+            }
 
     if props:
         res = requests.patch(
@@ -243,6 +274,8 @@ def update_notion_properties(page_id, updates_dict):
         )
         print("🛠 Updated:", list(props.keys()))
         print("🔄 Status:", res.status_code, res.text)
+    else:
+        print("⚠️ No recognized fields to update for this page.")
 
 
 def create_notion_subpage(parent_id, title, markdown_text):
@@ -305,7 +338,7 @@ Output only the final paragraph. No introductions, no labels, no closing.
     return resp.choices[0].message.content.strip()[:1999]
 
 
-# --- GPT logic: STRUCTURED FIELDS (VC memo style) ---
+# --- GPT logic: STRUCTURED FIELDS (VC memo style, JSON) ---
 def generate_gpt_output(idea: str, problem: str, snippets: List[str]) -> str:
     context = "\n\n".join(f"- {s}" for s in snippets)
 
@@ -316,16 +349,20 @@ Goal:
 Produce **concise, pitch-quality answers** that can be copied as-is into an internal one-pager. 
 Each field should be concrete, specific to THIS idea, and non-generic.
 
-Style rules:
-- Each field value is a **single line** (no line breaks).
-- 1–3 short sentences per field.
-- Prefer numbers, examples, named segments and use-cases over buzzwords.
-- If you must estimate, use realistic order-of-magnitude ranges and clearly mark them as approximate.
-- NEVER answer with "not specified", "TBD", "unknown" or similar. If data is missing, infer a plausible range and say it is approximate.
-- Do not greet, do not sign, do not add headings or commentary.
+Output format:
+- Return a **single JSON object**.
+- Keys are EXACTLY the field names.
+- Values are strings.
+- Do NOT wrap the JSON in backticks.
+- Do NOT add any commentary before or after the JSON.
 
-You must respond **only** in this exact format, one field per line:
-Field: Value
+Example of the required shape (the content is just an example, not a template):
+
+{
+  "Technology Leveraged": "Short description here",
+  "Market Size": "Short description here",
+  ...
+}
 """
 
     user_msg = f"""
@@ -336,23 +373,23 @@ Scientific context (snippets, may contain multiple papers or projects):
 Startup idea: "{idea}"
 Company-level problem statement: "{problem}"
 
-Using the context above and your own knowledge, fill in ALL of the following fields.
-Use **exactly** these field names, with exactly this spelling and punctuation, and in exactly this order:
+Using the context above and your own knowledge, fill in ALL of the following fields
+as a JSON object with string values. Use EXACTLY these keys:
 
-Technology Leveraged
-Market Size
-Competitive Advantage
-Feasibility Score (1–10)
-Investment Thesis Fit
-Next Steps
-Problem Severity (1–10)
-Tech Readiness Level (TRL 1–9)
-Strategic Partner Ideas
-Funding Needs
-Potential Founders / Talent
-Sector/Vertical
+- Technology Leveraged
+- Market Size
+- Competitive Advantage
+- Feasibility Score (1–10)
+- Investment Thesis Fit
+- Next Steps
+- Problem Severity (1–10)
+- Tech Readiness Level (TRL 1–9)
+- Strategic Partner Ideas
+- Funding Needs
+- Potential Founders / Talent
+- Sector/Vertical
 
-Content expectations for each field:
+Content expectations:
 - Technology Leveraged → Concrete description of the core scientific/engineering approach and why it is suited to the problem.
 - Market Size → Approximate TAM and initial SAM (with currency and geographies) plus 1 sentence on the adoption driver.
 - Competitive Advantage → 2–3 short differentiators separated by semicolons, focused on what is hard to copy.
@@ -366,9 +403,10 @@ Content expectations for each field:
 - Potential Founders / Talent → Profiles of ideal founders / early hires and any notable labs/teams that could spin this out.
 - Sector/Vertical → 1–2 labeled sectors/subsectors (e.g. "Quantum sensing for inertial navigation", "Aerospace & defense").
 
-Return:
-- Exactly 12 lines, one per field.
-- No extra text before or after.
+Constraints:
+- Every field MUST be present in the JSON.
+- Values must be single-line strings (no newline characters).
+- Do not include any extra keys.
 """
 
     resp = client.chat.completions.create(
