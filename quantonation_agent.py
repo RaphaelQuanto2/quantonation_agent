@@ -218,12 +218,27 @@ def update_problem_statement(page_id, text):
     print("✏️ Problem Statement updated." if res.status_code == 200 else f"❌ Failed: {res.text}")
 
 
-def update_notion_properties(page_id, updates_dict, props):
+def update_notion_properties(page_id, updates_dict, props=None):
     """
     Map GPT fields to existing Notion properties using fuzzy name matching
     and the actual Notion property types.
+
+    Can be called in two ways:
+      - update_notion_properties(page_id, updates_dict)            # props fetched from Notion
+      - update_notion_properties(page_id, updates_dict, props)     # props passed in (faster)
     """
     print("🔎 Raw GPT updates dict:", updates_dict)
+
+    # If props not provided (Streamlit app path), fetch them from Notion
+    if props is None:
+        resp = requests.get(
+            f"https://api.notion.com/v1/pages/{page_id}",
+            headers=notion_headers,
+        )
+        if resp.status_code != 200:
+            print(f"❌ Failed to fetch page properties: {resp.status_code} {resp.text}")
+            return
+        props = resp.json().get("properties", {})
 
     # Build normalized name → list of actual property names
     notion_props_by_norm = {}
@@ -283,7 +298,6 @@ def update_notion_properties(page_id, updates_dict, props):
         print("🔄 Status:", res.status_code, res.text)
     else:
         print("⚠️ No properties to update for this page.")
-
 
 def create_notion_subpage(parent_id, title, markdown_text):
     chunks = split_text_to_blocks(markdown_text)
