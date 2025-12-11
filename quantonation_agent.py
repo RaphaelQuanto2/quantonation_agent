@@ -6,7 +6,7 @@ import requests
 from dotenv import load_dotenv
 import openai
 from tqdm import tqdm
-from typing import List
+from typing import List, Dict
 import numpy as np
 import faiss
 import streamlit as st
@@ -43,6 +43,70 @@ INDEX_FILE = "faiss.index"
 TEXTS_FILE = "corpus_texts.json"
 EMBED_MODEL = "text-embedding-3-small"
 
+# --- Field specification (canonical names = Notion property names) ---
+FIELD_SPECS = [
+    {
+        "name": "Technology Leveraged",
+        "numeric": False,
+        "instructions": """Describe the core scientific / engineering approach (e.g. type of quantum sensor, photonic architecture, specific materials, control stack) and why this technology is appropriate for solving the stated problem. Mention what is technically hard or differentiated about it in 1–3 short sentences."""
+    },
+    {
+        "name": "Market Size",
+        "numeric": False,
+        "instructions": """Give an investor-style view of the market: approximate TAM and initial SAM with currency and geography, and 1 sentence on what drives adoption. Keep it specific (e.g. "inertial navigation for defense and satellite operators in US/EU") not generic."""
+    },
+    {
+        "name": "Competitive Advantage",
+        "numeric": False,
+        "instructions": """List 2–3 crisp differentiators separated by semicolons, focusing on what is hard to copy (IP, performance, integration, data, ecosystem, regulatory angle). This should read like the Competitive Edge bullet on a slide."""
+    },
+    {
+        "name": "Feasibility Score (1–10)",
+        "numeric": True,
+        "instructions": """Rate technical and execution feasibility on a 1–10 scale as "X/10 – short justification". Consider physics, engineering risk, talent availability, capex, and time-to-product."""
+    },
+    {
+        "name": "Investment Thesis Fit",
+        "numeric": False,
+        "instructions": """Explain in 1–3 sentences why this opportunity fits a deeptech / Quantonation-type thesis: depth of tech, defensibility, long-term upside, timing, and strategic relevance."""
+    },
+    {
+        "name": "Next Steps",
+        "numeric": False,
+        "instructions": """Write 2–4 concrete next steps separated by semicolons, e.g. "run lab prototype in relevant environment; secure 2 design partners in aerospace; file priority patents; hire founding control/ML engineer"."""
+    },
+    {
+        "name": "Problem Severity (1–10)",
+        "numeric": True,
+        "instructions": """Rate the severity of the problem for target customers as "X/10 – short justification", referencing economic, safety, or strategic impact."""
+    },
+    {
+        "name": "Tech Readiness Level",
+        "numeric": True,
+        "instructions": """Estimate TRL as "X/9 – short justification", mentioning whether the tech is at concept, lab demo, prototype, or pilot stage."""
+    },
+    {
+        "name": "Strategic Partner Ideas",
+        "numeric": False,
+        "instructions": """Name concrete types of partners or specific companies/labs that would be valuable (e.g. satellite primes, defense integrators, specific labs) and why, in 1–3 sentences."""
+    },
+    {
+        "name": "Funding Needs",
+        "numeric": False,
+        "instructions": """Give an order-of-magnitude view of funding needs for the next 24–36 months, with main uses of funds (team, capex, trials, regulatory, etc.)."""
+    },
+    {
+        "name": "Potential Founders / Talent",
+        "numeric": False,
+        "instructions": """Describe ideal founder and key early-hire profiles (e.g. "postdoc from X lab with work on Y; ex-A&D systems engineer; product lead with navigation background") and mention any notable labs/teams that could spin this out."""
+    },
+    {
+        "name": "Sector/Vertical",
+        "numeric": False,
+        "instructions": """Give 1–2 sector labels (e.g. "Quantum sensing for inertial navigation"; "Aerospace & defense")."""
+    },
+]
+
 
 # --- Utility functions ---
 def extract_text_from_pdf(uploaded_file):
@@ -54,18 +118,13 @@ def extract_text_from_pdf(uploaded_file):
 
 
 def embed_chunks_with_openai(chunks, model=EMBED_MODEL, batch_size=80):
-    """Safely embeds text chunks using OpenAI API, in batches."""
     embeddings = []
     for i in range(0, len(chunks), batch_size):
         batch = [c.strip()[:5000] for c in chunks[i:i + batch_size] if isinstance(c, str) and c.strip()]
         if not batch:
             continue
-        try:
-            resp = client.embeddings.create(model=model, input=batch)
-            embeddings.extend([e.embedding for e in resp.data])
-        except Exception as e:
-            print("❌ Embedding API error:", e)
-            raise e
+        resp = client.embeddings.create(model=model, input=batch)
+        embeddings.extend([e.embedding for e in resp.data])
     return embeddings
 
 
@@ -101,50 +160,6 @@ def extract_score(value_str):
         return None
     match = re.search(r"(\d+(\.\d+)?)", str(value_str))
     return float(match.group(1)) if match else None
-
-
-def normalize_key(k: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", k.lower())
-
-
-def parse_gpt_response(gpt_output: str):
-    """
-    Parse GPT output into a dict of {field_name: value}.
-
-    Priority:
-    1) Interpret as JSON object.
-    2) Fallback: "Field: Value" line parser (safety).
-    """
-    gpt_output = gpt_output.strip()
-    updates = {}
-
-    # --- 1) Try JSON ---
-    if gpt_output.startswith("{"):
-        try:
-            data = json.loads(gpt_output)
-            for k, v in data.items():
-                if isinstance(v, (str, int, float)):
-                    updates[k.strip()] = str(v).strip()
-            print("\n✅ Parsed JSON fields:", updates)
-            if updates:
-                return updates
-        except Exception as e:
-            print("⚠️ JSON parse failed, falling back to line parser:", e)
-
-    # --- 2) Fallback: "Field: Value" lines ---
-    lines = gpt_output.split("\n")
-    for line in lines:
-        line = line.strip().lstrip("-•1234567890. ").strip()
-        if not line:
-            continue
-        match = re.match(r"(.+?)\s*:\s*(.+)", line)
-        if match:
-            key = match.group(1).strip()
-            value = match.group(2).strip()
-            updates[key] = value
-
-    print("\n✅ Parsed fields (fallback):", updates)
-    return updates
 
 
 def split_text_to_blocks(text, max_len=2000):
@@ -218,72 +233,53 @@ def update_problem_statement(page_id, text):
     print("✏️ Problem Statement updated." if res.status_code == 200 else f"❌ Failed: {res.text}")
 
 
-def update_notion_properties(page_id, updates_dict, props):
+def update_notion_properties(page_id: str, fields: Dict[str, str]):
     """
-    Map GPT fields to existing Notion properties using fuzzy name matching
-    and the actual Notion property types.
+    Here we assume your Notion properties are named exactly like the FIELD_SPECS 'name'.
+    This is the list from your screenshots:
+      - Technology Leveraged (rich_text)
+      - Market Size (rich_text)
+      - Competitive Advantage (rich_text)
+      - Feasibility Score (1–10) (number)
+      - Investment Thesis Fit (rich_text)
+      - Next Steps (rich_text)
+      - Problem Severity (1–10) (number)
+      - Tech Readiness Level (number)
+      - Strategic Partner Ideas (rich_text)
+      - Funding Needs (rich_text)
+      - Potential Founders / Talent (rich_text)
+      - Sector/Vertical (rich_text)
     """
-    print("🔎 Raw GPT updates dict:", updates_dict)
-
-    # Build normalized name → list of actual property names
-    notion_props_by_norm = {}
-    for prop_name in props.keys():
-        norm = normalize_key(prop_name)
-        notion_props_by_norm.setdefault(norm, []).append(prop_name)
-
-    patch_props = {}
-
-    for gpt_field, value in updates_dict.items():
-        gpt_norm = normalize_key(gpt_field)
-
-        # 1) Exact normalized match
-        candidates = notion_props_by_norm.get(gpt_norm, [])
-
-        # 2) If no exact match, try "contains" matches (e.g. 'techreadinessleveltrl19' vs 'techreadinesslevel')
-        if not candidates:
-            for norm_name, names in notion_props_by_norm.items():
-                if gpt_norm in norm_name or norm_name in gpt_norm:
-                    candidates.extend(names)
-
-        if not candidates:
-            print(f"⚠️ No Notion property matched GPT field '{gpt_field}' (normalized '{gpt_norm}')")
+    props = {}
+    for spec in FIELD_SPECS:
+        name = spec["name"]
+        if name not in fields:
             continue
-
-        # Choose the first candidate
-        notion_field = candidates[0]
-        notion_prop = props[notion_field]
-        notion_type = notion_prop.get("type")
-
-        print(f"🔗 Mapping GPT field '{gpt_field}' → Notion property '{notion_field}' (type={notion_type})")
-
-        if notion_type == "number":
+        value = fields[name]
+        if spec["numeric"]:
             num = extract_score(value)
             if num is not None:
-                patch_props[notion_field] = {"number": num}
+                props[name] = {"number": num}
             else:
-                print(f"⚠️ Couldn't parse numeric score for {notion_field}: '{value}'")
-        elif notion_type == "rich_text":
-            if isinstance(value, str) and value.lower().strip() == "not specified":
-                continue
-            patch_props[notion_field] = {
+                print(f"⚠️ Could not parse numeric value for '{name}': '{value}'")
+        else:
+            props[name] = {
                 "rich_text": [
-                    {"text": {"content": truncate_words(str(value), 1999)}}
+                    {"text": {"content": truncate_words(value, 1999)}}
                 ]
             }
-        else:
-            # Ignore titles/selects/etc for now
-            print(f"ℹ️ Notion property '{notion_field}' has unsupported type '{notion_type}', skipping.")
 
-    if patch_props:
-        res = requests.patch(
-            f"https://api.notion.com/v1/pages/{page_id}",
-            headers=notion_headers,
-            json={"properties": patch_props},
-        )
-        print("🛠 Updated Notion fields:", list(patch_props.keys()))
-        print("🔄 Status:", res.status_code, res.text)
-    else:
-        print("⚠️ No properties to update for this page.")
+    if not props:
+        print("⚠️ No props to update.")
+        return
+
+    res = requests.patch(
+        f"https://api.notion.com/v1/pages/{page_id}",
+        headers=notion_headers,
+        json={"properties": props},
+    )
+    print("🛠 Updated:", list(props.keys()))
+    print("🔄 Status:", res.status_code, res.text)
 
 
 def create_notion_subpage(parent_id, title, markdown_text):
@@ -318,7 +314,7 @@ def create_notion_subpage(parent_id, title, markdown_text):
     )
 
 
-# --- GPT logic: PROBLEM STATEMENT (company / pitch style) ---
+# --- GPT logic: PROBLEM STATEMENT ---
 def generate_problem_statement(idea: str) -> str:
     prompt = f"""
 You are a deeptech VC partner and former operator.
@@ -346,64 +342,55 @@ Output only the final paragraph. No introductions, no labels, no closing.
     return resp.choices[0].message.content.strip()[:1999]
 
 
-# --- GPT logic: STRUCTURED FIELDS (VC memo style, JSON) ---
-def generate_gpt_output(idea: str, problem: str, snippets: List[str]) -> str:
-    context = "\n\n".join(f"- {s}" for s in snippets)
+# --- GPT logic: per-field generator ---
+def generate_field_value(field_spec, idea: str, problem: str, context: str) -> str:
+    name = field_spec["name"]
+    instructions = field_spec["instructions"]
+    numeric = field_spec["numeric"]
 
-    system_msg = """
-You are a senior deeptech VC partner at Quantonation, writing **internal memo fields** for a potential investment.
+    prompt = f"""
+You are a senior deeptech VC partner at Quantonation.
 
-Goal:
-Produce **concise, pitch-quality answers** that can be copied as-is into an internal one-pager. 
-Each field should be concrete, specific to THIS idea, and non-generic.
-
-You MUST output a single valid JSON object, with string values, and no extra text.
-"""
-
-    user_msg = f"""
-Scientific context (snippets, may contain multiple papers or projects):
-
-{context}
+You are filling the **"{name}"** field of an internal one-page investment memo for the following startup idea.
 
 Startup idea: "{idea}"
 Company-level problem statement: "{problem}"
 
-Return a JSON object with EXACTLY these 12 keys (string values only):
+Scientific context (snippets from literature and prior notes):
+{context}
 
-"Technology Leveraged"
-"Market Size"
-"Competitive Advantage"
-"Feasibility Score (1–10)"
-"Investment Thesis Fit"
-"Next Steps"
-"Problem Severity (1–10)"
-"Tech Readiness Level (TRL 1–9)"
-"Strategic Partner Ideas"
-"Funding Needs"
-"Potential Founders / Talent"
-"Sector/Vertical"
+Field guidelines:
+{instructions}
 
-Values:
-- 1–3 short sentences per field, single line (no newline characters).
-- Use realistic numbers and ranges when needed, clearly labelled as approximate.
-- Never return "TBD", "N/A" or "not specified" as a value.
+Output constraints:
+- Write ONLY the value for "{name}".
+- Do not repeat the field name.
+- Single line of text (no line breaks).
+- No bullet points.
+- No preamble, no explanation of what you are doing.
+
+If the field is a score (e.g. 1–10 or TRL), include the score and a short justification as described.
 """
-
     resp = client.chat.completions.create(
         model="gpt-4o",  # or "gpt-4"
-        messages=[
-            {"role": "system", "content": system_msg},
-            {"role": "user", "content": truncate_words(user_msg)},
-        ],
-        temperature=0.25,
-        response_format={"type": "json_object"},
+        messages=[{"role": "user", "content": truncate_words(prompt)}],
+        temperature=0.25 if numeric else 0.4,
     )
-    output = resp.choices[0].message.content.strip()
-    print("\n🎯 GPT Output Raw:\n", output)
-    return output
+    return resp.choices[0].message.content.strip().replace("\n", " ")
 
 
-# --- GPT logic: ONE-PAGER / DEEPTECH BRIEF (pitch-quality memo) ---
+def generate_all_fields(idea: str, problem: str, snippets: List[str]) -> Dict[str, str]:
+    context = "\n\n".join(f"- {s}" for s in snippets)
+    results: Dict[str, str] = {}
+    for spec in FIELD_SPECS:
+        print(f"🧩 Generating field: {spec['name']}")
+        value = generate_field_value(spec, idea, problem, context)
+        print(f"   → {value}")
+        results[spec["name"]] = value
+    return results
+
+
+# --- GPT logic: memo ---
 def generate_deeptech_brief(idea: str, problem: str, snippets: List[str]) -> str:
     context = "\n\n".join(f"- {s}" for s in snippets)
     prompt = f"""
@@ -501,10 +488,14 @@ def run():
             continue
 
         context_snippets = search_corpus(index, corpus_texts, f"{idea}. {problem}", top_k=5)
-        gpt_resp = generate_gpt_output(idea, problem, context_snippets)
-        updates = parse_gpt_response(gpt_resp)
-        update_notion_properties(page_id, updates, props)
 
+        # 1) Generate all field values (one GPT call per field)
+        field_values = generate_all_fields(idea, problem, context_snippets)
+
+        # 2) Write them into Notion
+        update_notion_properties(page_id, field_values)
+
+        # 3) Generate memo subpage
         memo = generate_deeptech_brief(idea, problem, context_snippets)
         title = f"{datetime.datetime.now().strftime('%Y-%m-%d')} – Memo: {idea[:60]}"
         create_notion_subpage(page_id, title, memo)
