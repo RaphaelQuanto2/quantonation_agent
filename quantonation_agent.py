@@ -107,17 +107,13 @@ def extract_score(value_str):
     return float(match.group(1)) if match else None
 
 
-def normalize_key(k):
-    return re.sub(r"[^a-z0-9]", "", k.lower())
-
-
 def parse_gpt_response(gpt_output: str):
     """
     Parse GPT output into a dict of {field_name: value}.
 
     Priority:
-    1) Try to parse as JSON object: {"Field": "Value", ...}
-    2) Fallback to legacy "Field: Value" line-based parsing.
+    1) Interpret as JSON object.
+    2) Fallback: "Field: Value" line parser (for safety).
     """
     gpt_output = gpt_output.strip()
     updates = {}
@@ -126,7 +122,6 @@ def parse_gpt_response(gpt_output: str):
     if gpt_output.startswith("{"):
         try:
             data = json.loads(gpt_output)
-            # Normalize: keep only str or numeric values
             for k, v in data.items():
                 if isinstance(v, (str, int, float)):
                     updates[k.strip()] = str(v).strip()
@@ -224,43 +219,55 @@ def update_problem_statement(page_id, text):
 
 
 def update_notion_properties(page_id, updates_dict):
-    known_fields = {
-        normalize_key("Technology Leveraged"): "Technology Leveraged",
-        normalize_key("Market Size"): "Market Size",
-        normalize_key("Competitive Advantage"): "Competitive Advantage",
-        normalize_key("Feasibility Score (1–10)"): "Feasibility Score (1–10)",
-        normalize_key("Investment Thesis Fit"): "Investment Thesis Fit",
-        normalize_key("Next Steps"): "Next Steps",
-        normalize_key("Problem Severity (1–10)"): "Problem Severity (1–10)",
-        normalize_key("Tech Readiness Level"): "Tech Readiness Level",
-        normalize_key("Tech Readiness Level (TRL 1–9)"): "Tech Readiness Level",
-        normalize_key("Strategic Partner Ideas"): "Strategic Partner Ideas",
-        normalize_key("Funding Needs"): "Funding Needs",
-        normalize_key("Potential Founders / Talent"): "Potential Founders / Talent",
-        normalize_key("Sector/Vertical"): "Sector/Vertical",
+    # Canonical expected fields from GPT → Notion property names
+    field_map = {
+        "Technology Leveraged": "Technology Leveraged",
+        "Market Size": "Market Size",
+        "Competitive Advantage": "Competitive Advantage",
+        "Feasibility Score (1–10)": "Feasibility Score (1–10)",
+        "Feasibility Score (1-10)": "Feasibility Score (1–10)",  # tolerate ASCII hyphen
+        "Investment Thesis Fit": "Investment Thesis Fit",
+        "Next Steps": "Next Steps",
+        "Problem Severity (1–10)": "Problem Severity (1–10)",
+        "Problem Severity (1-10)": "Problem Severity (1–10)",
+        "Tech Readiness Level (TRL 1–9)": "Tech Readiness Level",
+        "Tech Readiness Level (TRL 1-9)": "Tech Readiness Level",
+        "Strategic Partner Ideas": "Strategic Partner Ideas",
+        "Funding Needs": "Funding Needs",
+        "Potential Founders / Talent": "Potential Founders / Talent",
+        "Sector/Vertical": "Sector/Vertical",
     }
-    props = {}
+
+    numeric_targets = {
+        "Feasibility Score (1–10)",
+        "Feasibility Score (1-10)",
+        "Problem Severity (1–10)",
+        "Problem Severity (1-10)",
+        "Tech Readiness Level (TRL 1–9)",
+        "Tech Readiness Level (TRL 1-9)",
+    }
 
     print("🔎 Raw GPT updates dict:", updates_dict)
 
-    for k, value in updates_dict.items():
-        field_key = normalize_key(k)
-        field = known_fields.get(field_key)
-        if not field:
-            print(f"⚠️ Unknown or unmatched field from GPT: '{k}'")
+    props = {}
+
+    for gpt_field, value in updates_dict.items():
+        if gpt_field not in field_map:
+            print(f"⚠️ GPT field not recognized and will be ignored: '{gpt_field}'")
             continue
 
-        if any(x in field for x in ["Score", "Severity", "Level"]):
+        notion_field = field_map[gpt_field]
+
+        if gpt_field in numeric_targets:
             num = extract_score(value)
             if num is not None:
-                props[field] = {"number": num}
+                props[notion_field] = {"number": num}
             else:
-                print(f"⚠️ Couldn't parse numeric score for {field}: '{value}'")
+                print(f"⚠️ Couldn't parse numeric score for {notion_field}: '{value}'")
         else:
             if isinstance(value, str) and value.lower().strip() == "not specified":
-                # Skip null markers
                 continue
-            props[field] = {
+            props[notion_field] = {
                 "rich_text": [
                     {"text": {"content": truncate_words(str(value), 1999)}}
                 ]
@@ -272,7 +279,7 @@ def update_notion_properties(page_id, updates_dict):
             headers=notion_headers,
             json={"properties": props},
         )
-        print("🛠 Updated:", list(props.keys()))
+        print("🛠 Updated Notion fields:", list(props.keys()))
         print("🔄 Status:", res.status_code, res.text)
     else:
         print("⚠️ No recognized fields to update for this page.")
@@ -331,7 +338,7 @@ Requirements:
 Output only the final paragraph. No introductions, no labels, no closing.
 """
     resp = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",  # or "gpt-4" if you prefer
         messages=[{"role": "user", "content": prompt}],
         temperature=0.3,
     )
@@ -349,20 +356,7 @@ Goal:
 Produce **concise, pitch-quality answers** that can be copied as-is into an internal one-pager. 
 Each field should be concrete, specific to THIS idea, and non-generic.
 
-Output format:
-- Return a **single JSON object**.
-- Keys are EXACTLY the field names.
-- Values are strings.
-- Do NOT wrap the JSON in backticks.
-- Do NOT add any commentary before or after the JSON.
-
-Example of the required shape (the content is just an example, not a template):
-
-{
-  "Technology Leveraged": "Short description here",
-  "Market Size": "Short description here",
-  ...
-}
+You MUST output a single valid JSON object, with string values, and no extra text.
 """
 
     user_msg = f"""
@@ -373,49 +367,50 @@ Scientific context (snippets, may contain multiple papers or projects):
 Startup idea: "{idea}"
 Company-level problem statement: "{problem}"
 
-Using the context above and your own knowledge, fill in ALL of the following fields
-as a JSON object with string values. Use EXACTLY these keys:
+Return a JSON object with EXACTLY these 12 keys (string values only):
 
-- Technology Leveraged
-- Market Size
-- Competitive Advantage
-- Feasibility Score (1–10)
-- Investment Thesis Fit
-- Next Steps
-- Problem Severity (1–10)
-- Tech Readiness Level (TRL 1–9)
-- Strategic Partner Ideas
-- Funding Needs
-- Potential Founders / Talent
-- Sector/Vertical
+"Technology Leveraged"
+"Market Size"
+"Competitive Advantage"
+"Feasibility Score (1–10)"
+"Investment Thesis Fit"
+"Next Steps"
+"Problem Severity (1–10)"
+"Tech Readiness Level (TRL 1–9)"
+"Strategic Partner Ideas"
+"Funding Needs"
+"Potential Founders / Talent"
+"Sector/Vertical"
 
-Content expectations:
-- Technology Leveraged → Concrete description of the core scientific/engineering approach and why it is suited to the problem.
-- Market Size → Approximate TAM and initial SAM (with currency and geographies) plus 1 sentence on the adoption driver.
-- Competitive Advantage → 2–3 short differentiators separated by semicolons, focused on what is hard to copy.
-- Feasibility Score (1–10) → "X/10 –" followed by a brief justification referencing technical and execution risk.
-- Investment Thesis Fit → 1–2 sentences on why this fits a deeptech / Quantonation-type thesis.
+Content rules (summarised):
+- Technology Leveraged → core scientific/engineering approach and why it fits this problem.
+- Market Size → approximate TAM and initial SAM with currency + geography + 1 sentence on adoption driver.
+- Competitive Advantage → 2–3 short differentiators separated by semicolons.
+- Feasibility Score (1–10) → "X/10 –" plus brief justification.
+- Investment Thesis Fit → why this fits a Quantonation-style deeptech thesis.
 - Next Steps → 2–4 concrete milestones separated by semicolons.
-- Problem Severity (1–10) → "X/10 –" with a brief justification referencing economic or strategic pain.
-- Tech Readiness Level (TRL 1–9) → "X/9 –" with a short justification referencing prototype/lab/pilot status.
-- Strategic Partner Ideas → Names or types of specific potential partners and what they would bring.
-- Funding Needs → Order-of-magnitude capital and main use of funds over the next 24–36 months.
-- Potential Founders / Talent → Profiles of ideal founders / early hires and any notable labs/teams that could spin this out.
-- Sector/Vertical → 1–2 labeled sectors/subsectors (e.g. "Quantum sensing for inertial navigation", "Aerospace & defense").
+- Problem Severity (1–10) → "X/10 –" plus justification tied to economic/strategic pain.
+- Tech Readiness Level (TRL 1–9) → "X/9 –" plus justification describing lab/pilot stage.
+- Strategic Partner Ideas → specific partners or partner types and what they bring.
+- Funding Needs → ballpark capital and use of funds for 24–36 months.
+- Potential Founders / Talent → profiles of ideal founders / key early hires and any notable labs/teams.
+- Sector/Vertical → 1–2 clear sector labels (e.g. "Quantum sensing for inertial navigation"; "Aerospace & defense").
 
 Constraints:
-- Every field MUST be present in the JSON.
-- Values must be single-line strings (no newline characters).
-- Do not include any extra keys.
+- Values MUST be single-line strings (no newline characters in values).
+- Do not add keys, omit keys, or nest objects.
+- Do not wrap JSON in backticks or commentary.
 """
 
     resp = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",  # or "gpt-4"
         messages=[
             {"role": "system", "content": system_msg},
             {"role": "user", "content": truncate_words(user_msg)},
         ],
         temperature=0.25,
+        # If your model supports it, this enforces real JSON:
+        response_format={"type": "json_object"},
     )
     output = resp.choices[0].message.content.strip()
     print("\n🎯 GPT Output Raw:\n", output)
@@ -475,7 +470,7 @@ Output only the memo, starting with "## Scientific Context & Problem".
 No preamble, no meta-comments, no closing signature.
 """
     resp = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",  # or "gpt-4"
         messages=[{"role": "user", "content": truncate_words(prompt)}],
         temperature=0.6,
     )
